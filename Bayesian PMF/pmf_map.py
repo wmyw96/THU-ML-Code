@@ -150,8 +150,8 @@ if __name__ == '__main__':
     lambda_V = 0.002
     learning_rate = 0.005
     save_freq = 1
-    iters = N_train // batch_size
-    valid_iters = N_valid // valid_batch_size
+    iters = (N_train + batch_size - 1) // batch_size
+    valid_iters = (N_valid + valid_batch_size - 1) // valid_batch_size
     result_path = 'tmp/pmf_map/'
 
     # Build the computation graph
@@ -227,7 +227,7 @@ if __name__ == '__main__':
             test_rmse = []
             time_test = -time.time()
             for t in range(valid_iters):
-                ed_pos = min((t + 1) * valid_batch_size, N_train + 1)
+                ed_pos = min((t + 1) * valid_batch_size, N_valid + 1)
                 su = valid_data[t * valid_batch_size:ed_pos, 0] - 1
                 sv = valid_data[t * valid_batch_size:ed_pos, 1] - 1
                 tr = valid_data[t * valid_batch_size:ed_pos, 2]
