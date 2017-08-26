@@ -143,7 +143,7 @@ if __name__ == '__main__':
     N_train = np.shape(train_data)[0]
     N_valid = np.shape(valid_data)[0]
     D = 30
-    epoches = 30
+    epoches = 300
     batch_size = 100000
     valid_batch_size = 100000
     lambda_U = 0.002
