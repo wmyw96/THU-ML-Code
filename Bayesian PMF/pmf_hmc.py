@@ -179,7 +179,7 @@ if __name__ == '__main__':
     N_test = np.shape(test_data)[0]
     D = 10
     epoches = 30
-    batch_size = 10
+    batch_size = 100
     test_batch_size = 100000
     lambda_U = 0.002
     lambda_V = 0.002
@@ -244,9 +244,9 @@ if __name__ == '__main__':
     pred_rating = tf.reduce_mean(pred_rating, axis=0)
     error = pred_rating - true_rating
     rmse = tf.sqrt(tf.reduce_mean(error * error))
-    hmc_u = zs.HMC(step_size=1e-3, n_leapfrogs=20, adapt_step_size=True,
+    hmc_u = zs.HMC(step_size=1e-5, n_leapfrogs=10, adapt_step_size=True,
                    target_acceptance_rate=0.6)
-    hmc_v = zs.HMC(step_size=1e-3, n_leapfrogs=20, adapt_step_size=True,
+    hmc_v = zs.HMC(step_size=1e-5, n_leapfrogs=10, adapt_step_size=True,
                    target_acceptance_rate=0.6)
     target_u = select_from_axis1(U, select_u)
     target_v = select_from_axis1(V, select_v)
@@ -340,8 +340,7 @@ if __name__ == '__main__':
                 ssu = np.zeros([nv])
                 ssv = np.array(range(nv))
                 _ = sess.run(trans_cand_U, feed_dict={candidate_idx_u: [i]})
-                #for j in range(10):
-                _ = sess.run(infer_u, feed_dict={select_v: sv,
+                _ = sess.run(sample_u_op, feed_dict={select_v: sv,
                                                       true_rating: tr,
                                                       subselect_u: ssu,
                                                       subselect_v: ssv,
@@ -355,7 +354,7 @@ if __name__ == '__main__':
                 ssv = np.zeros([nu])
                 ssu = np.array(range(nu))
                 _ = sess.run(trans_cand_V, feed_dict={candidate_idx_v: [i]})
-                _ = sess.run(infer_v, feed_dict={select_u: su,
+                _ = sess.run(sample_v_op, feed_dict={select_u: su,
                                                       true_rating: tr,
                                                       subselect_u: ssu,
                                                       subselect_v: ssv,
@@ -365,12 +364,14 @@ if __name__ == '__main__':
             epoch_time += time.time()
             print('Step %d(%.1fs): Finished!' % (step, epoch_time))
 
-            '''time_epoch = -time.time()
+            '''
+            time_epoch = -time.time()
             res = []
             np.random.shuffle(train_data)
             for t in range(iters):
                 ed_pos = min((t + 1) * batch_size, N_train + 1)
                 su = train_data[t * batch_size:ed_pos, 0] - 1
+                sv = train_data[t * batch_size:ed_pos, 1] - 1
                 tr = train_data[t * batch_size:ed_pos, 2]
                 _, re = sess.run([infer, rmse],
                                  feed_dict={select_u: su,
