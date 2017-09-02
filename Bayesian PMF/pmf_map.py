@@ -32,6 +32,8 @@ if __name__ == '__main__':
     lambda_V = 0.01
     learning_rate = 0.005
     save_freq = 50
+    valid_freq = 10
+    test_freq = 10
     iters = (N_train + batch_size - 1) // batch_size
     valid_iters = (N_valid + valid_batch_size - 1) // valid_batch_size
     test_iters = (N_test + test_batch_size - 1) // test_batch_size
@@ -127,23 +129,43 @@ if __name__ == '__main__':
             print('Epoch {} ({:.1f}s): train rmse = {}'.format(
                 epoch, time_epoch, np.mean(res)))
 
-            test_rmse = []
-            test_rrmse = []
-            time_test = -time.time()
-            for t in range(test_iters):
-                ed_pos = min((t + 1) * test_batch_size, N_test + 1)
-                su = test_data[t * test_batch_size:ed_pos, 0]
-                sv = test_data[t * test_batch_size:ed_pos, 1]
-                tr = test_data[t * test_batch_size:ed_pos, 2]
-                re, ore = sess.run([rmse, old_rmse],
+            if epoch % valid_freq == 0:
+                valid_rmse = []
+                valid_rrmse = []
+                time_valid = -time.time()
+                for t in range(valid_iters):
+                    ed_pos = min((t + 1) * valid_batch_size, N_valid + 1)
+                    su = valid_data[t * valid_batch_size:ed_pos, 0]
+                    sv = valid_data[t * valid_batch_size:ed_pos, 1]
+                    tr = valid_data[t * valid_batch_size:ed_pos, 2]
+                    re, ore = sess.run([rmse, old_rmse],
                                        feed_dict={pair_U: su, pair_V: sv,
                                                   true_rating: tr})
-                test_rmse.append(re)
-                test_rrmse.append(ore)
-            time_test += time.time()
-            print('>>> TEST ({:.1f}s)'.format(time_test))
-            print('>> Test rmse = {}, uncorrected rmse = {}'.
-                  format(np.mean(test_rmse), np.mean(test_rrmse)))
+                    valid_rmse.append(re)
+                    valid_rrmse.append(ore)
+                time_valid += time.time()
+                print('>>> VALIDATION ({:.1f}s)'.format(time_valid))
+                print('>> Validation rmse = {}, uncorrected rmse = {}'.
+                      format(np.mean(valid_rmse), np.mean(valid_rrmse)))
+
+            if epoch % test_freq == 0:
+                test_rmse = []
+                test_rrmse = []
+                time_test = -time.time()
+                for t in range(test_iters):
+                    ed_pos = min((t + 1) * test_batch_size, N_test + 1)
+                    su = test_data[t * test_batch_size:ed_pos, 0]
+                    sv = test_data[t * test_batch_size:ed_pos, 1]
+                    tr = test_data[t * test_batch_size:ed_pos, 2]
+                    re, ore = sess.run([rmse, old_rmse],
+                                       feed_dict={pair_U: su, pair_V: sv,
+                                                  true_rating: tr})
+                    test_rmse.append(re)
+                    test_rrmse.append(ore)
+                time_test += time.time()
+                print('>>> TEST ({:.1f}s)'.format(time_test))
+                print('>> Test rmse = {}, uncorrected rmse = {}'.
+                      format(np.mean(test_rmse), np.mean(test_rrmse)))
 
             if epoch % save_freq == 0:
                 save_path = os.path.join(result_path,
