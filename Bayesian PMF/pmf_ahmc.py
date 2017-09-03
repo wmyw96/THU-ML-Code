@@ -105,7 +105,7 @@ if __name__ == '__main__':
     error = pred_rating - true_rating
     rmse = tf.sqrt(tf.reduce_mean(error * error))
 
-    # Define models for inference (HMC)
+    # Define models for HMC
     n = tf.placeholder(tf.int32, shape=[], name='n')
     m = tf.placeholder(tf.int32, shape=[], name='m')
 
@@ -168,8 +168,8 @@ if __name__ == '__main__':
             for t in range(test_iters):
                 ed_pos = min((t + 1) * test_batch_size, N_test + 1)
                 n_batch = ed_pos - t * test_batch_size
-                su = test_data[t * test_batch_size:ed_pos, 0] - 1
-                sv = test_data[t * test_batch_size:ed_pos, 1] - 1
+                su = test_data[t * test_batch_size:ed_pos, 0]
+                sv = test_data[t * test_batch_size:ed_pos, 1]
                 tr = test_data[t * test_batch_size:ed_pos, 2]
                 re = sess.run(rmse, feed_dict={select_u: su, select_v: sv,
                                                true_rating: tr,
@@ -183,9 +183,9 @@ if __name__ == '__main__':
 
             epoch_time = -time.time()
             for i in range(N):
-                nv = len(user_movie[i + 1])
-                sv = np.array(user_movie[i + 1]) - 1
-                tr = np.array(user_movie_score[i + 1])
+                nv = len(user_movie[i])
+                sv = np.array(user_movie[i])
+                tr = np.array(user_movie_score[i])
                 ssu = np.zeros([nv])
                 ssv = np.array(range(nv))
                 _ = sess.run(trans_cand_U, feed_dict={candidate_idx_u: [i]})
@@ -197,9 +197,9 @@ if __name__ == '__main__':
                                                      m: nv})
                 _ = sess.run(trans_us_cand[i])
             for i in range(M):
-                nu = len(movie_user[i + 1])
-                su = np.array(movie_user[i + 1]) - 1
-                tr = np.array(movie_user_score[i + 1])
+                nu = len(movie_user[i])
+                su = np.array(movie_user[i])
+                tr = np.array(movie_user_score[i])
                 ssv = np.zeros([nu])
                 ssu = np.array(range(nu))
                 _ = sess.run(trans_cand_V, feed_dict={candidate_idx_v: [i]})
