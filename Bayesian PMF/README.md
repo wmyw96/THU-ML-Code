@@ -70,6 +70,8 @@ Here $X_{i:j}$ represent $X_i, X_{i+1}, \cdots, X_{j}$, $C$ is the chunk size, w
 
 **Specification**: the whole user-film-rating tuple is randomly divided into 85%, 5% and 10% separately for training/validation/test. We use training dataset to train, use validation dataset to do model selection(only use early-stopping to perform regularization), and use test dataset to report results.
 
+<font color='red'>**Notes**</font>: We found the random shuffle for the dataset has a tremendous impact on the final results. For example, just for the simple linear MAP solution, by trying different seed the results (might) range from [0.85, 1.12], so we adjust the seed to make the result of MAP approximate the results describe in (Yin, 2016)*A Neural Autoregressive Approach to Collaborative Filtering*. We use seed 1234 for Numpy random shuffle and shuffle the dataset twice.
+
 **Results**: 
 
 | Model                    | Validation RMSE | Test RMSE | Time [per epoch] |  Epoches [best(total)]  |
