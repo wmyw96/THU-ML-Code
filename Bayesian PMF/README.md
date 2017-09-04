@@ -79,5 +79,6 @@ Here $X_{i:j}$ represent $X_i, X_{i+1}, \cdots, X_{j}$, $C$ is the chunk size, w
 | PMF (linear)             | 0.8597          | 0.8808    | 1.5 s  | 100(300) |
 | PMF (linear, AHMC)       |          |     | 13.8min |     |
 | PMF (linear, AHMC, paralleled, chunksize=50)       |   0.8569       | 0.8530 | 2.1min | 240(500) |
+| BPMF (full linear, Gibbs)       | -               | 0.8086    | 4.5s   | -   |
 | PMF (sigmoid)            |                 |           |        |     |
 | PMF (sigmoid, AHMC)      |                 |           |        |     |

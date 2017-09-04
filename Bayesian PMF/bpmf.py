@@ -6,6 +6,7 @@ import os
 import re
 import tensorflow as tf
 import numpy as np
+from dataset import load_movielens1m_mapped
 
 
 def random_weights(R, C):
@@ -179,16 +180,10 @@ def model_graph(U_t, V_t, N, M, K, mapping, score):
     for i in range(N):
         if i % 10 == 0:
             print('build graph: till node %d' % i)
-        select_UiS = tf.convert_to_tensor(score[i + 1], dtype=tf.float32)
-        select_UiV = tf.convert_to_tensor(mapping[i + 1], dtype=tf.int32) - 1
+        select_UiS = tf.convert_to_tensor(score[i], dtype=tf.float32)
+        select_UiV = tf.convert_to_tensor(mapping[i], dtype=tf.int32)
         select_UiS = tf.tile(tf.expand_dims(select_UiS, 0), [K, 1])
         select_UiS = tf.expand_dims(select_UiS, 2)
-
-        # selected_Vs = []
-        # for k in range(K):
-        #     selected_Vs = tf.expand_dims(tf.gather(V_t[k, :, :],
-        #                                            select_UiV), 0)
-        # selected_V = tf.concat(selected_Vs, axis=0)    # [K, num, D]
 
         selected_V = tf.transpose(V_t, perm=[1, 0, 2])
         selected_V = tf.gather(selected_V, select_UiV)
@@ -217,10 +212,12 @@ def model_graph(U_t, V_t, N, M, K, mapping, score):
     return U_tp1
 
 
-
 if __name__ == '__main__':
-    M, N, user_map, train_data, valid_data, test_data, user_movie, \
-        user_movie_score, movie_user, movie_user_score = read_data_from_csv()
+    #M, N, user_map, train_data, valid_data, test_data, user_movie, \
+    #    user_movie_score, movie_user, movie_user_score = read_data_from_csv()
+    M, N, train_data, valid_data, test_data, user_movie, \
+        user_movie_score, movie_user, movie_user_score \
+            = load_movielens1m_mapped('data/ml-1m.zip')
     # set configurations and hyper parameters
     N_train = np.shape(train_data)[0]
     N_test = np.shape(test_data)[0]
@@ -293,16 +290,16 @@ if __name__ == '__main__':
             time_test = -time.time()
             for t in range(test_iters):
                 ed_pos = min((t + 1) * test_batch_size, N_test + 1)
-                su = test_data[t * test_batch_size:ed_pos, 0] - 1
-                sv = test_data[t * test_batch_size:ed_pos, 1] - 1
+                su = test_data[t * test_batch_size:ed_pos, 0]
+                sv = test_data[t * test_batch_size:ed_pos, 1]
                 tr = test_data[t * test_batch_size:ed_pos, 2]
                 re = sess.run(rmse, feed_dict={pair_U: su, pair_V: sv,
                                                true_rating: tr, U_t: U_cur,
                                                V_t: V_cur})
                 test_rmse.append(re)
             time_test += time.time()
-            print('>>> VALIDATION ({:.1f}s)'.format(time_test))
-            print('>> Validation rmse = {}'.format(
+            print('>>> TEST ({:.1f}s)'.format(time_test))
+            print('>> Test rmse = {}'.format(
                 np.sqrt(np.mean(test_rmse))))
 
             epoch_time = -time.time()
