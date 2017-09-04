@@ -75,7 +75,7 @@ Here $X_{i:j}$ represent $X_i, X_{i+1}, \cdots, X_{j}$, $C$ is the chunk size, w
 | Model                    | Validation RMSE | Test RMSE | Time [per epoch] |  Epoches [best(total)]  |
 | ------------------------ |:---------------:|:---------:|:------------:|:-----:|
 | PMF (linear)             | 0.8597          | 0.8808    | 1.5 s  | 100(300) |
-| PMF (linear, AHMC)       |                 |           | 13.8min |     |
-| PMF (linear, AHMC, paralleled, chunksize=50)       |                 |           | 2.1min |     |
+| PMF (linear, AHMC)       |          |     | 13.8min |     |
+| PMF (linear, AHMC, paralleled, chunksize=50)       |   0.8569       | 0.8530 | 2.1min | 240(500) |
 | PMF (sigmoid)            |                 |           |        |     |
 | PMF (sigmoid, AHMC)      |                 |           |        |     |
