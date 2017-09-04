@@ -213,8 +213,8 @@ def model_graph(U_t, V_t, N, M, K, mapping, score):
 
 
 if __name__ == '__main__':
-    #M, N, user_map, train_data, valid_data, test_data, user_movie, \
-    #    user_movie_score, movie_user, movie_user_score = read_data_from_csv()
+    np.random.seed(1234)
+    tf.set_random_seed(1237)
     M, N, train_data, valid_data, test_data, user_movie, \
         user_movie_score, movie_user, movie_user_score \
             = load_movielens1m_mapped('data/ml-1m.zip')
@@ -222,7 +222,6 @@ if __name__ == '__main__':
     N_train = np.shape(train_data)[0]
     N_test = np.shape(test_data)[0]
     D = 30
-    epoches = 30
     batch_size = 100000
     test_batch_size = 100000
     lambda_U = 0.002
