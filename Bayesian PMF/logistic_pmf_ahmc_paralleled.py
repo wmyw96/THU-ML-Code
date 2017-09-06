@@ -29,8 +29,8 @@ def pmf(observed, n, m, D, n_particles, select_u, select_v,
         gather_u = select_from_axis1(u, select_u)  # [K, batch, D]
         gather_v = select_from_axis1(v, select_v)  # [K, batch, D]
         pred_mu = tf.reduce_sum(gather_u * gather_v, axis=2)
-        r = zs.Normal('r', pred_mu, tf.log(alpha_pred))
-    return model, pred_mu
+        r = zs.Normal('r', tf.sigmoid(pred_mu), tf.log(alpha_pred))
+    return model, tf.sigmoid(pred_mu)
 
 
 def select_from_corpus(l, r, u_v, u_v_score):
@@ -104,7 +104,7 @@ if __name__ == '__main__':
     subselect_v = tf.placeholder(tf.int32, shape=[None, ], name='ss_v')
     alpha_u = 1.0
     alpha_v = 1.0
-    alpha_pred = 0.2
+    alpha_pred = 0.2 / 4.0
     n_leapfrogs = 10
 
     # Find non-trained files or peoples
@@ -143,12 +143,13 @@ if __name__ == '__main__':
     # Define models for prediction
     true_rating = tf.placeholder(tf.float32, shape=[None, ],
                                  name='true_rating')
-    true_rating_2d = tf.tile(tf.expand_dims(true_rating, 0), [K, 1])
+    normalized_rating = (true_rating - 1.0) / 4.0
+    true_rating_2d = tf.tile(tf.expand_dims(normalized_rating, 0), [K, 1])
     _, pred_rating = pmf({'u': U, 'v': V, 'r': true_rating_2d}, N, M, D, K,
                          select_u, select_v, alpha_u, alpha_v, alpha_pred)
     pred_rating = tf.reduce_mean(pred_rating, axis=0)
-    error = pred_rating - true_rating
-    rmse = tf.sqrt(tf.reduce_mean(error * error))
+    error = pred_rating - normalized_rating
+    rmse = tf.sqrt(tf.reduce_mean(error * error)) * 4
 
     # Define models for HMC
     n = tf.placeholder(tf.int32, shape=[], name='n')
@@ -298,3 +299,4 @@ if __name__ == '__main__':
                 time_valid += time.time()
                 print('>>> TEST ({:.1f}s)'.format(time_valid))
                 print('>> Test rmse = {}'.format((np.mean(valid_rmse))))
+

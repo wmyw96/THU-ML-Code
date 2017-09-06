@@ -74,11 +74,15 @@ Here $X_{i:j}$ represent $X_i, X_{i+1}, \cdots, X_{j}$, $C$ is the chunk size, w
 
 **Results**: 
 
-| Model                    | Validation RMSE | Test RMSE | Time [per epoch] |  Epoches [best(total)]  |
-| ------------------------ |:---------------:|:---------:|:------------:|:-----:|
-| PMF (linear)             | 0.8597          | 0.8808    | 1.5 s  | 100(300) |
-| PMF (linear, AHMC)       |          |     | 13.8min |     |
-| PMF (linear, AHMC, paralleled, chunksize=50)       |   0.8569       | 0.8530 | 2.1min | 240(500) |
-| BPMF (full linear, Gibbs)       | -               | 0.8444    | 4.5s   | 9(300)  |
-| PMF (sigmoid)            |                 |           |        |     |
-| PMF (sigmoid, AHMC)      |                 |           |        |     |
+(num of samples K=8 for all sampling based method, for paralleled, we fix chunk size be 50)
+
+| Model                   | Inference  | Validation RMSE | Test RMSE | Time [per epoch] |  Epoches [best(total)]  |
+| ------------------------ | ---------- |:---------------:|:---------:|:------------:|:-----:|
+| linear PMF 30D | MAP | 0.8597 | 0.8808 | 1.5s | 100(300) |
+| linear PMF 30D | AHMC | - | 0.8555 | 13.8min | 244(500) |
+| linear PMF 30D | AHMC (paralleled) | 0.8569 | 0.8530 | 2.1min | 240(500) |
+| linear PMF 60D | MAP | 0.8580 | 0.8730 | 1.8s |  70(300) |
+| linear PMF 60D | AHMC (paralleled) | 0.8859 | 0.8498 | 3.6min | 90(500) |
+| linear BPMF 30D | Gibbs | - | 0.8444 | 4.5s   | 9(300)  |
+| logistic PMF 30D | MAP |           |        |     |
+| logistic PMF 30D | AHMC (paralleled) | 0.8529 | 0.8478 | 2.1min | 130(500) |
