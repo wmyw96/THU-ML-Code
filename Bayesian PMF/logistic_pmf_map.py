@@ -6,12 +6,11 @@ import os
 import tensorflow as tf
 import numpy as np
 from dataset import load_movielens1m_mapped
-from utils import plot_density_from_data
 
 
 def random_weights(R, C):
     return tf.random_normal(shape=(R, C), mean=0,
-                            stddev=0.001, dtype=tf.float32)
+                            stddev=1.0, dtype=tf.float32)
 
 
 if __name__ == '__main__':
@@ -25,12 +24,12 @@ if __name__ == '__main__':
     N_valid = np.shape(valid_data)[0]
     N_test = np.shape(test_data)[0]
     D = 30
-    epoches = 100
+    epoches = 300
     batch_size = 100000
     valid_batch_size = 100000
     test_batch_size = 100000
-    lambda_U = 0.01
-    lambda_V = 0.01
+    lambda_U = 0.04
+    lambda_V = 0.04
     learning_rate = 0.005
     save_freq = 50
     valid_freq = 10
@@ -73,7 +72,7 @@ if __name__ == '__main__':
     optimized_U = tf.gather(U, pair_U)  # (batch_size, D)
     optimized_V = tf.gather(V, pair_V)  # (batch_size, D)
     mf_pred_rating = tf.reduce_sum(optimized_U * optimized_V, axis=1)
-    constant_rating = tf.convert_to_tensor([3.0], dtype=tf.float32)
+    constant_rating = tf.convert_to_tensor([0.0], dtype=tf.float32)
     constant_rating = tf.tile(constant_rating, tf.shape(mf_pred_rating))
 
     exists_u = tf.gather(trained_user, pair_U)
@@ -81,11 +80,14 @@ if __name__ == '__main__':
     exists_uv = tf.logical_and(exists_u, exists_v)
     pred_rating = tf.where(exists_uv, mf_pred_rating, constant_rating)
 
-    error = pred_rating - true_rating
-    old_error = mf_pred_rating - true_rating
-    rmse = tf.sqrt(tf.reduce_mean(error * error))
-    old_rmse = tf.sqrt(tf.reduce_mean(old_error * old_error))
-    cost = 0.5 * tf.reduce_sum(error * error) * \
+    pred_rating = tf.sigmoid(pred_rating)
+    trans_rating = (true_rating - 1.0) / 4.0
+
+    error = pred_rating - trans_rating
+    old_error = tf.sigmoid(mf_pred_rating) - trans_rating
+    rmse = tf.sqrt(tf.reduce_mean(error * error)) * 4
+    old_rmse = tf.sqrt(tf.reduce_mean(old_error * old_error)) * 4
+    cost = 0.5 * tf.reduce_sum(error * error) * 4 * \
         ((N_train + 0.0) / num_films) + \
         lambda_U * 0.5 * tf.reduce_sum(U * U, axis=[0, 1]) + \
         lambda_V * 0.5 * tf.reduce_sum(V * V, axis=[0, 1])
@@ -110,13 +112,6 @@ if __name__ == '__main__':
             print('Restoring model from {}...'.format(ckpt_file))
             begin_epoch = int(ckpt_file.split('.')[-2]) + 1
             saver.restore(sess, ckpt_file)
-        # plot
-
-        u_en = sess.run(U)
-        v_en = sess.run(V)
-        us = set(range(N))
-        vs = set(range(M))
-        plot_density_from_data(train_data, u_en, v_en, vs, us)
 
         for epoch in range(begin_epoch, epoches + 1):
             time_epoch = -time.time()
