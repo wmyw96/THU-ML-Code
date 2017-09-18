@@ -22,19 +22,21 @@ def pmf(observed, n, m, D, n_particles, alpha_u,
     with zs.BayesianNet(observed=observed) as model:
         mu_z = tf.zeros(shape=[n, D])
         log_std_z = tf.ones(shape=[n, D]) * tf.log(alpha_u)
-        z = zs.Normal('z', mu_z, log_std_z,
+        z = zs.Normal('z', mu_z, logstd=log_std_z,
                       n_samples=n_particles, group_event_ndims=1)  # [K, n, D]
         mu_v = tf.zeros(shape=[m, D])
         log_std_v = tf.ones(shape=[m, D]) * tf.log(alpha_v)
-        v = zs.Normal('v', mu_v, log_std_v,
+        v = zs.Normal('v', mu_v, logstd=log_std_v,
                       n_samples=n_particles, group_event_ndims=1)  # [K, m, D]
-        mu_bias = tf.zeros(shape=[m])
-        log_std_bias = tf.ones(shape=[m, D]) * tf.log(alpha_bias)
+        mu_bias = tf.zeros(shape=[m, 1])
+        log_std_bias = tf.ones(shape=[m, 1]) * tf.log(alpha_bias)
         bias = zs.Normal('bias', mu_bias, log_std_bias,
-                         n_samples=n_particles)
-        bs = tf.tile(tf.expand_dims(bias, 1), [1, n, 1])
-        pred_mu = tf.matmul(z, v, transpose_b=True) + bs  # [K, n, m]
-        r = zs.Normal('r', pred_mu, tf.log(alpha_pred))
+                         n_samples=n_particles, group_event_ndims=1) # [K, m, 1]
+        bs = tf.tile(tf.expand_dims(bias, axis=1), [1, n, 1, 1])
+        bs = tf.squeeze(bs, axis=3)
+        tv = tf.transpose(v, [0, 2, 1])
+        pred_mu = tf.matmul(z, tv) + bs  # [K, n, m]
+        r = zs.Normal('r', pred_mu, logstd=tf.log(alpha_pred))
     return model, pred_mu
 
 
@@ -54,21 +56,21 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training):
         log_std_bias = \
             tf.get_variable('q_log_std_bias', shape=[m, 1],
                             initializer=tf.random_normal_initializer(0, 0.1))
-        v = zs.Normal('v', mu_v, log_std_v,
+        v = zs.Normal('v', mu_v, logstd=log_std_v,
                       n_samples=n_particles, group_event_ndims=1)  # [K, m, D]
-        bias = zs.Normal('bias', mu_bias, log_std_bias,
-                         n_samples=n_particles)  # [K, m, 1]
+        bias = zs.Normal('bias', mu_bias, logstd=log_std_bias,
+                         n_samples=n_particles, group_event_ndims=1)  # [K, m, 1]
         input_v = tf.tile(tf.expand_dims(v, 1), [1, n, 1, 1])  # [K, n, m, D]
         input_bias = tf.tile(tf.expand_dims(bias, 1), [1, n, 1, 1])
         input_r = tf.tile(tf.expand_dims(tf.expand_dims(r, 0), 3),
-                          [K, 1, 1, 1]) - input_bias
-        input = tf.concat([input_v, input_r], 3)  # [K, n, m, D+1]
+                          [n_particles, 1, 1, 1]) - input_bias
+        input_i = tf.concat([input_v, input_r], 3)  # [K, n, m, D+1]
         mask = tf.convert_to_tensor(mask, dtype=tf.float32)
-        mask3 = tf.tile(tf.expand_dims(mask, 0), [K, 1, 1])
+        mask3 = tf.tile(tf.expand_dims(mask, 0), [n_particles, 1, 1])
         maskDp1 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, D+1])
-        input = input * maskDp1
+        input_i = input_i * maskDp1
         lz_r = layers.fully_connected(
-            tf.to_float(input), 100, normalizer_fn=layers.batch_norm,
+            tf.to_float(input_i), 100, normalizer_fn=layers.batch_norm,
             normalizer_params=normalizer_params)
         maskl100 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 100])
         lz_r = lz_r * maskl100
@@ -91,9 +93,9 @@ def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
         cur_mask = [0] * M
         cur_rating = [0] * M
         for j in range(len(user_movie[user_id])):
-            cur_mask[user_movie[user_id, j]] = 1
-            cur_rating[user_movie[user_id, j]] = \
-                user_movie_score[user_id, j] - 3
+            cur_mask[user_movie[user_id][j]] = 1
+            cur_rating[user_movie[user_id][j]] = \
+                user_movie_score[user_id][j] - 3
         mask.append(cur_mask)
         rating.append(cur_rating)
     mask_batch = np.array(mask)
@@ -148,8 +150,7 @@ if __name__ == '__main__':
     n_z = 30
     batch_size = 10
     test_batch_size = 10
-    learning_rate = 0.005
-    K = 8
+    K = 2
     num_epochs = 1000
     learning_rate = 0.001
     anneal_lr_freq = 200
@@ -196,6 +197,12 @@ if __name__ == '__main__':
         log_pz, log_pv, log_pbias, log_pr = \
             model.local_log_prob(['z', 'v', 'bias', 'r'])
         log_pr = tf.reduce_sum(log_pr * gen_mask, axis=2)
+        log_pr = tf.reduce_mean(log_pr, axis=1) * \
+            N / tf.cast(n, dtype=tf.float32)
+        log_pz = tf.reduce_mean(log_pz, axis=1) * \
+            N / tf.cast(n, dtype=tf.float32)
+        log_pv = tf.reduce_sum(log_pv, axis=1)
+        log_pbias = tf.reduce_sum(log_pbias, axis=1)
         return log_pz + log_pv + log_pbias + log_pr  # [K, n]
 
     variational = q_net({}, infer_rating, infer_mask, n, n_z,
@@ -206,6 +213,11 @@ if __name__ == '__main__':
                                            local_log_prob=True)
     qbias_samples, log_qbias = variational.query('bias', outputs=True,
                                                  local_log_prob=True)
+    log_qz = tf.reduce_mean(log_qz, axis=1) * \
+        N / tf.cast(n, dtype=tf.float32)
+    log_qv = tf.reduce_sum(log_qv, axis=1)
+    log_qbias = tf.reduce_sum(log_qbias, axis=1)
+
     lower_bound = tf.reduce_mean(
         zs.sgvb(log_joint, {'x': gen_rating},
                 {'z': [qz_samples, log_qz], 'v': [qv_samples, log_qv],
@@ -223,8 +235,8 @@ if __name__ == '__main__':
     infer = optimizer.apply_gradients(grads)
 
     # Prediction and SE calculation
-    _, pred = pmf({'z': [qz_samples, log_qz], 'v': [qv_samples, log_qv],
-                   'bias': [qbias_samples, log_qbias]},
+    _, pred = pmf({'z': qz_samples, 'v': qv_samples,
+                   'bias': qbias_samples},
                   n, M, n_z, n_particles, hp_alpha_u, hp_alpha_v,
                   hp_alpha_pred, hp_alpha_bias, is_training)
     pred = tf.reduce_mean(pred, axis=0)
@@ -267,6 +279,7 @@ if __name__ == '__main__':
                                             gen_mask: tr_mask,
                                             gen_rating: tr_rating,
                                             learning_rate_ph: learning_rate})
+                print(__ / cur_batch_size)
                 ses.append(__)
             epoch_time += time.time()
             print('Epoch {}({:.1f}s): rmse = {:.1f}'.format(
