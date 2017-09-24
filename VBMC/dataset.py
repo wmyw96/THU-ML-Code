@@ -44,6 +44,8 @@ def load_movielens1m(path):
         user_id = int(term[0]) - 1
         movie_id = int(term[1]) - 1
         rating = int(term[2])
+        #if movie_id > 50:
+        #    continue
         corpus.append((user_id, movie_id, rating))
         num_users = max(num_users, user_id + 1)
         num_movies = max(num_movies, movie_id + 1)
@@ -88,18 +90,22 @@ def load_movielens1m_mapped(path):
         user_movie, user_movie_score, movie_user, movie_user_score
 
 
-def load_movielens1m_mapped_ptest(path):
+def load_movielens1m_mapped_ptest(path, valid_map=False):
     num_movies, num_users, train, valid, test = load_movielens1m(path)
 
     user_movie = []
     user_movie_score = []
     test_user_movie = []
     test_user_movie_score = []
+    valid_user_movie = []
+    valid_user_movie_score = []
     for i in range(num_users):
         user_movie.append([])
         user_movie_score.append([])
         test_user_movie.append([])
         test_user_movie_score.append([])
+        valid_user_movie.append([])
+        valid_user_movie_score.append([])
     movie_user = []
     movie_user_score = []
     for i in range(num_users):
@@ -122,6 +128,19 @@ def load_movielens1m_mapped_ptest(path):
         test_user_movie[user_id].append(movie_id)
         test_user_movie_score[user_id].append(rating)
 
-    return num_movies, num_users, train, valid, test, \
-        user_movie, user_movie_score, movie_user, movie_user_score, \
-        test_user_movie, test_user_movie_score
+    for i in range(np.shape(valid)[0]):
+        user_id = valid[i, 0]
+        movie_id = valid[i, 1]
+        rating = valid[i, 2]
+        valid_user_movie[user_id].append(movie_id)
+        valid_user_movie_score[user_id].append(rating)
+
+    if valid_map is False:
+        return num_movies, num_users, train, valid, test, \
+            user_movie, user_movie_score, movie_user, movie_user_score, \
+            test_user_movie, test_user_movie_score
+    else:
+        return num_movies, num_users, train, valid, test, \
+            user_movie, user_movie_score, movie_user, movie_user_score, \
+            test_user_movie, test_user_movie_score, valid_user_movie, \
+            valid_user_movie_score

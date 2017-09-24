@@ -48,8 +48,9 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training):
             tf.get_variable('q_mu_v', shape=[m, D],
                             initializer=tf.random_normal_initializer(0, 0.1))
         log_std_v = \
-            tf.get_variable('q_log_std_v', shape=[m, D],
+            tf.get_variable('q_log_std_v', shape=[m, 1],
                             initializer=tf.random_normal_initializer(0, 0.1))
+        log_std_v = tf.tile(log_std_v, [1, D])
         mu_bias = \
             tf.get_variable('q_mu_bias', shape=[m, 1],
                             initializer=tf.random_normal_initializer(0, 0.1))
@@ -70,13 +71,18 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training):
         maskDp1 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, D+1])
         input_i = input_i * maskDp1
         lz_r = layers.fully_connected(
-            tf.to_float(input_i), 100, normalizer_fn=layers.batch_norm,
+            input_i, 200, normalizer_fn=layers.batch_norm,
+            normalizer_params=normalizer_params)
+        maskl200 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 200])
+        lz_r = lz_r * maskl200
+        lz_r = layers.fully_connected(
+            input_i, 100, normalizer_fn=layers.batch_norm,
             normalizer_params=normalizer_params)
         maskl100 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 100])
         lz_r = lz_r * maskl100
         lz_r = tf.reduce_sum(lz_r, 2) / tf.reduce_sum(maskl100, 2)
         lz_r = layers.fully_connected(
-            lz_r, 100, normalizer_fn=layers.batch_norm,
+            lz_r, 200, normalizer_fn=layers.batch_norm,
             normalizer_params=normalizer_params)
         z_mean = layers.fully_connected(lz_r, D, activation_fn=None)
         z_log_std = layers.fully_connected(lz_r, D, activation_fn=None)
@@ -88,6 +94,7 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training):
 def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
     mask = []
     rating = []
+    cc = 0
     for i in range(tail - head):
         user_id = idx_list[head + i]
         cur_mask = [0] * M
@@ -96,11 +103,12 @@ def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
             cur_mask[user_movie[user_id][j]] = 1
             cur_rating[user_movie[user_id][j]] = \
                 user_movie_score[user_id][j] - 3
+            cc += 1
         mask.append(cur_mask)
         rating.append(cur_rating)
     mask_batch = np.array(mask)
     rating_batch = np.array(rating) / np.sqrt(2)  # enforce var to be 1
-    return mask_batch, rating_batch
+    return mask_batch, rating_batch, cc
 
 
 def get_test_data(M, head, tail, user_movie, user_movie_score,
@@ -114,18 +122,18 @@ def get_test_data(M, head, tail, user_movie, user_movie_score,
         cur_mask = [0] * M
         cur_rating = [0] * M
         for j in range(len(user_movie[user_id])):
-            cur_mask[user_movie[user_id, j]] = 1
-            cur_rating[user_movie[user_id, j]] = \
-                user_movie_score[user_id, j] - 3
+            cur_mask[user_movie[user_id][j]] = 1
+            cur_rating[user_movie[user_id][j]] = \
+                user_movie_score[user_id][j] - 3
         mask.append(cur_mask)
         rating.append(cur_rating)
 
         cur_bmask = [0] * M
         cur_brating = [0] * M
         for j in range(len(user_movie_test[user_id])):
-            cur_bmask[user_movie_test[user_id, j]] = 1
-            cur_brating[user_movie_test[user_id, j]] = \
-                user_movie_score_test[user_id, j] - 3
+            cur_bmask[user_movie_test[user_id][j]] = 1
+            cur_brating[user_movie_test[user_id][j]] = \
+                user_movie_score_test[user_id][j] - 3
         bmask.append(cur_bmask)
         brating.append(cur_brating)
 
@@ -141,27 +149,31 @@ if __name__ == '__main__':
     tf.set_random_seed(1237)
     M, N, train_data, valid_data, test_data, user_movie, \
         user_movie_score, movie_user, movie_user_score, \
-        user_movie_test, user_movie_score_test \
-        = load_movielens1m_mapped_ptest('data/ml-1m.zip')
+        user_movie_test, user_movie_score_test,\
+        user_movie_valid, user_movie_score_valid, \
+        = load_movielens1m_mapped_ptest('data/ml-1m.zip', valid_map=True)
 
     # set configurations and hyper parameters
     N_train = np.shape(train_data)[0]
     N_test = np.shape(test_data)[0]
+    N_valid = np.shape(valid_data)[0]
     n_z = 30
-    batch_size = 10
-    test_batch_size = 10
-    K = 2
+    batch_size = 100
+    test_batch_size = 100
+    valid_batch_size = 100
+    K = 10
     num_epochs = 1000
-    learning_rate = 0.001
+    learning_rate = 0.01
     anneal_lr_freq = 200
     anneal_lr_rate = 0.75
     iters = (N + batch_size - 1) // batch_size
     test_iters = (N + test_batch_size - 1) // test_batch_size
+    valid_iters = (N + valid_batch_size - 1) // valid_batch_size
     result_path = 'tmp/pmf_vi/'
 
     hp_alpha_u = 1.0
     hp_alpha_v = 1.0
-    hp_alpha_pred = 0.2
+    hp_alpha_pred = 0.1
     hp_alpha_bias = 1.0
 
     # Find non-trained files or peoples
@@ -197,9 +209,9 @@ if __name__ == '__main__':
         log_pz, log_pv, log_pbias, log_pr = \
             model.local_log_prob(['z', 'v', 'bias', 'r'])
         log_pr = tf.reduce_sum(log_pr * gen_mask, axis=2)
-        log_pr = tf.reduce_mean(log_pr, axis=1) * \
+        log_pr = tf.reduce_sum(log_pr, axis=1) * \
             N / tf.cast(n, dtype=tf.float32)
-        log_pz = tf.reduce_mean(log_pz, axis=1) * \
+        log_pz = tf.reduce_sum(log_pz, axis=1) * \
             N / tf.cast(n, dtype=tf.float32)
         log_pv = tf.reduce_sum(log_pv, axis=1)
         log_pbias = tf.reduce_sum(log_pbias, axis=1)
@@ -213,19 +225,19 @@ if __name__ == '__main__':
                                            local_log_prob=True)
     qbias_samples, log_qbias = variational.query('bias', outputs=True,
                                                  local_log_prob=True)
-    log_qz = tf.reduce_mean(log_qz, axis=1) * \
+    log_qz = tf.reduce_sum(log_qz, axis=1) * \
         N / tf.cast(n, dtype=tf.float32)
     log_qv = tf.reduce_sum(log_qv, axis=1)
     log_qbias = tf.reduce_sum(log_qbias, axis=1)
 
     lower_bound = tf.reduce_mean(
-        zs.sgvb(log_joint, {'x': gen_rating},
+        zs.sgvb(log_joint, {'r': gen_rating},
                 {'z': [qz_samples, log_qz], 'v': [qv_samples, log_qv],
                  'bias': [qbias_samples, log_qbias]}, axis=0))
 
     # Importance sampling estimates of marginal log likelihood
     is_log_likelihood = tf.reduce_mean(
-        zs.is_loglikelihood(log_joint, {'x': gen_rating},
+        zs.is_loglikelihood(log_joint, {'r': gen_rating},
                             {'z': [qz_samples, log_qz],
                              'v': [qv_samples, log_qv],
                              'bias': [qbias_samples, log_qbias]}, axis=0))
@@ -236,7 +248,8 @@ if __name__ == '__main__':
 
     # Prediction and SE calculation
     _, pred = pmf({'z': qz_samples, 'v': qv_samples,
-                   'bias': qbias_samples},
+                   'bias': qbias_samples,
+                   'r': gen_rating},
                   n, M, n_z, n_particles, hp_alpha_u, hp_alpha_v,
                   hp_alpha_pred, hp_alpha_bias, is_training)
     pred = tf.reduce_mean(pred, axis=0)
@@ -266,9 +279,9 @@ if __name__ == '__main__':
                 l = t * batch_size
                 r = min((t + 1) * batch_size, N)
                 cur_batch_size = r - l
-                tr_mask, tr_rating = get_traing_data(M, l, r, idxes,
-                                                     user_movie,
-                                                     user_movie_score)
+                tr_mask, tr_rating, cc = get_traing_data(M, l, r, idxes,
+                                                         user_movie,
+                                                         user_movie_score)
                 _, __ = sess.run([infer, se],
                                  feed_dict={n: cur_batch_size,
                                             m: M,
@@ -279,33 +292,59 @@ if __name__ == '__main__':
                                             gen_mask: tr_mask,
                                             gen_rating: tr_rating,
                                             learning_rate_ph: learning_rate})
-                print(__ / cur_batch_size)
                 ses.append(__)
             epoch_time += time.time()
-            print('Epoch {}({:.1f}s): rmse = {:.1f}'.format(
-                epoch, epoch_time, np.sqrt(np.sum(ses) / N_train) * 2))
+            print('Epoch {}({:.1f}s): rmse = {}'.format(
+                epoch + 1, epoch_time, np.sqrt(np.sum(ses) / N_train * 2)))
 
-            test_se = []
-            time_test = -time.time()
-            for t in range(test_iters):
-                l = t * test_batch_size
-                r = min((t + 1) * test_batch_size, N)
-                cur_batch_size = r - l
-                in_mask, in_rating, out_mask, out_rating = \
-                    get_test_data(M, l, r, user_movie, user_movie_score,
-                                  user_movie_test, user_movie_score_test)
-                _, __ = sess.run([infer, se],
-                                 feed_dict={n: cur_batch_size,
-                                            m: M,
-                                            is_training: True,
-                                            n_particles: K,
-                                            infer_mask: in_mask,
-                                            infer_rating: in_rating,
-                                            gen_mask: out_mask,
-                                            gen_rating: out_rating,
-                                            learning_rate_ph: learning_rate})
-                test_se.append(__)
-            time_test += time.time()
-            print('>>> TEST ({:.1f}s)'.format(time_test))
-            print('>> Test rmse = {}'.format(
-                (np.sqrt(np.sum(test_se) / N_test * 2))))
+            if (epoch + 1) % 10 == 0:
+                test_se = []
+                time_test = -time.time()
+                for t in range(valid_iters):
+                    l = t * valid_batch_size
+                    r = min((t + 1) * valid_batch_size, N)
+                    cur_batch_size = r - l
+                    in_mask, in_rating, out_mask, out_rating = \
+                        get_test_data(M, l, r, user_movie, user_movie_score,
+                                      user_movie_valid, user_movie_score_valid)
+                    __ = sess.run(se,
+                                  feed_dict={n: cur_batch_size,
+                                             m: M,
+                                             is_training: False,
+                                             n_particles: K * 5,
+                                             infer_mask: in_mask,
+                                             infer_rating: in_rating,
+                                             gen_mask: out_mask,
+                                             gen_rating: out_rating,
+                                             learning_rate_ph: learning_rate})
+                    test_se.append(__)
+                time_test += time.time()
+                print('>>> VALIDATION ({:.1f}s)'.format(time_test))
+                print('>> Valid rmse = {}'.format(
+                    (np.sqrt(np.sum(test_se) / N_valid * 2))))
+
+            if (epoch + 1) % 10 == 0:
+                test_se = []
+                time_test = -time.time()
+                for t in range(test_iters):
+                    l = t * test_batch_size
+                    r = min((t + 1) * test_batch_size, N)
+                    cur_batch_size = r - l
+                    in_mask, in_rating, out_mask, out_rating = \
+                        get_test_data(M, l, r, user_movie, user_movie_score,
+                                      user_movie_test, user_movie_score_test)
+                    __ = sess.run(se,
+                                  feed_dict={n: cur_batch_size,
+                                             m: M,
+                                             is_training: False,
+                                             n_particles: K * 5,
+                                             infer_mask: in_mask,
+                                             infer_rating: in_rating,
+                                             gen_mask: out_mask,
+                                             gen_rating: out_rating,
+                                             learning_rate_ph: learning_rate})
+                    test_se.append(__)
+                time_test += time.time()
+                print('>>> TEST ({:.1f}s)'.format(time_test))
+                print('>> Test rmse = {}'.format(
+                    (np.sqrt(np.sum(test_se) / N_test * 2))))

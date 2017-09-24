@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Results:
+# test 0.8412
+
 import time
 import tensorflow as tf
 import numpy as np
