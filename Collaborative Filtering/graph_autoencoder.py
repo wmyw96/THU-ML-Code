@@ -219,7 +219,7 @@ if __name__ == '__main__':
     hidden_1 = tf.nn.dropout(hidden_1, keep_prob=keep_prob)
 
     W_comm = tf.get_variable('w_comm', shape=[n_hidden_l1, n_hidden_l2],
-                             initializer=tf.random_normal_initializer(0, 0.01))
+                             initializer=tf.random_normal_initializer(0, 0.1))
     hidden_2 = tf.nn.relu(tf.matmul(hidden_1, W_comm))
 
     selected_users = tf.placeholder(tf.int32, shape=[None, ],
