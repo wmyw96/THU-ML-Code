@@ -34,7 +34,8 @@ def pmf(observed, n, m, D, n_particles, alpha_u,
     return model, pred_mu
 
 
-def q_net(observed, r, mask, n, D, m, n_particles, is_training, kp_dropout):
+def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
+          is_training, kp_dropout):
     with zs.BayesianNet(observed=observed) as variational:
         normalizer_params = {'is_training': is_training,
                              'updates_collections': None}
@@ -47,26 +48,18 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training, kp_dropout):
         log_std_v = tf.tile(log_std_v, [1, D])
         v = zs.Normal('v', mu_v, logstd=log_std_v,
                       n_samples=n_particles, group_event_ndims=1)  # [K, m, D]
-        input_v = tf.tile(tf.expand_dims(mu_v, 0), [n_particles, 1, 1])
-        input_v = tf.tile(tf.expand_dims(input_v, 1), [1, n, 1, 1])  # [K, n, m, D]
-        input_r = tf.tile(tf.expand_dims(tf.expand_dims(r, 0), 3),
-                          [n_particles, 1, 1, 1])
-        input_i = tf.concat([input_v, input_r], 3)  # [K, n, m, D+1]
-        mask = tf.convert_to_tensor(mask, dtype=tf.float32)
-        mask3 = tf.tile(tf.expand_dims(mask, 0), [n_particles, 1, 1])
-        maskDp1 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, D+1])
-        input_i = input_i * maskDp1
-        lz_r = layers.fully_connected(input_i, 100)
-        maskl50 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 50])
-        maskl100 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 100])
-        maskl200 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 200])
-        lz_r = lz_r * maskl100
-        lz_r = layers.fully_connected(lz_r, 100)
-        lz_r = lz_r * maskl100
-        lz_r = tf.reduce_sum(lz_r, 2) / tf.reduce_sum(maskl100, 2)
-        lz_r = layers.fully_connected(lz_r, 200)
-        z_mean = layers.fully_connected(lz_r, D, activation_fn=None)
-        z_log_std = layers.fully_connected(lz_r, D, activation_fn=None)
+        input_v = select_from_axis1(v, indices)       # [K, np, D]
+        input_r = tf.tile(tf.expand_dims(tf.expand_dims(ratings, 0), 2),
+                          [n_particles, 1, 1])
+        input_i = tf.concat([input_v, input_r], 2)  # [K, np, D+1]
+        lh_r = layers.fully_connected(input_i, 200)
+        lh_r = layers.fully_connected(lh_r, 100)
+        hd = \
+            tf.matmul(
+                tf.tile(tf.expand_dims(portion, 0), [n_particles, 1, 1]), lh_r)
+        lz_h = layers.fully_connected(hd, 200)
+        z_mean = layers.fully_connected(lz_h, D, activation_fn=None)
+        z_log_std = layers.fully_connected(lz_h, D, activation_fn=None)
         z = zs.Normal('z', z_mean, logstd=z_log_std, n_samples=None,
                       group_event_ndims=1)
     return variational
@@ -75,6 +68,9 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training, kp_dropout):
 def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
     mask = []
     rating = []
+    i_indices = []
+    i_ratings = []
+    i_coeff = []
     cc = 0
     for i in range(tail - head):
         user_id = idx_list[head + i]
@@ -87,33 +83,42 @@ def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
             cur_mask[user_movie[user_id][j]] = 1
             cur_rating[user_movie[user_id][j]] = \
                 user_movie_score[user_id][j] - bias
+            i_ratings = i_ratings + [user_movie_score[user_id][j] - bias]
             cc += 1
+
+        i_indices = i_indices + user_movie[user_id]
+        i_coeff = i_coeff + [len(user_movie[user_id])]
+
         mask.append(cur_mask)
         rating.append(cur_rating)
     mask_batch = np.array(mask)
     rating_batch = np.array(rating) / np.sqrt(2)  # enforce var to be 1
-    return mask_batch, rating_batch, cc
+    i_ratings = np.array(i_ratings) / np.sqrt(2)
+    i_portion = np.zeros((len(i_coeff), sum(i_coeff)))
+    id = 0
+    for i in range(len(i_coeff)):
+        for j in range(i_coeff[i]):
+            i_portion[i][id] = 1.0 / i_coeff[i]
+            id += 1
+    return i_indices, i_ratings, i_portion, mask_batch, rating_batch, cc
 
 
 def get_test_data(M, head, tail, user_movie, user_movie_score,
                   user_movie_test, user_movie_score_test):
-    mask = []
-    rating = []
+    i_indices = []
+    i_ratings = []
+    i_coeff = []
     bmask = []
     brating = []
     for i in range(tail - head):
         user_id = head + i
-        cur_mask = [0] * M
-        cur_rating = [0] * M
         bias = 3.0
         if len(user_movie_score[user_id]) > 0:
             bias = np.mean(user_movie_score[i])
         for j in range(len(user_movie[user_id])):
-            cur_mask[user_movie[user_id][j]] = 1
-            cur_rating[user_movie[user_id][j]] = \
-                user_movie_score[user_id][j] - bias
-        mask.append(cur_mask)
-        rating.append(cur_rating)
+            i_ratings += [user_movie_score[user_id][j] - bias]
+        i_coeff += [len(user_movie_score[user_id])]
+        i_indices += user_movie[user_id]
 
         cur_bmask = [0] * M
         cur_brating = [0] * M
@@ -124,11 +129,16 @@ def get_test_data(M, head, tail, user_movie, user_movie_score,
         bmask.append(cur_bmask)
         brating.append(cur_brating)
 
-    infer_mask = np.array(mask)
-    infer_rating = np.array(rating) / np.sqrt(2)  # enforce var to be 1
+    i_ratings = np.array(i_ratings) / np.sqrt(2)
     mask_batch = np.array(bmask)
     rating_batch = np.array(brating) / np.sqrt(2)
-    return infer_mask, infer_rating, mask_batch, rating_batch
+    i_portion = np.zeros((len(i_coeff), sum(i_coeff)))
+    id = 0
+    for i in range(len(i_coeff)):
+        for j in range(i_coeff[i]):
+            i_portion[i][id] = 1.0 / i_coeff[i]
+            id += 1
+    return i_indices, i_ratings, i_portion, mask_batch, rating_batch
 
 
 if __name__ == '__main__':
@@ -185,9 +195,12 @@ if __name__ == '__main__':
     m = tf.placeholder(tf.int32, shape=[], name='m')
     is_training = tf.placeholder(tf.bool, shape=[], name='is_training')
     n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
-    infer_mask = tf.placeholder(tf.float32, shape=[None, M], name='infer_mask')
-    infer_rating = tf.placeholder(tf.float32, shape=[None, M],
-                                  name='infer_rating')
+    infer_indices = \
+        tf.placeholder(tf.int32, shape=[None], name='infer_indices')
+    infer_ratings = \
+        tf.placeholder(tf.float32, shape=[None], name='infer_ratings')
+    infer_portion = \
+        tf.placeholder(tf.float32, shape=[None, None], name='infer_portion')
     gen_mask = tf.placeholder(tf.float32, shape=[None, M], name='gen_mask')
     gen_rating = tf.placeholder(tf.float32, shape=[None, M], name='gen_rating')
 
@@ -204,24 +217,20 @@ if __name__ == '__main__':
         log_pv = tf.reduce_sum(log_pv, axis=1)
         return log_pz + log_pv + log_pr  # [K, n]
 
-    variational = q_net({}, infer_rating, infer_mask, n, n_z,
-                        M, n_particles, is_training, keep_prob)
+    variational = q_net({}, infer_ratings, infer_indices, infer_portion,
+                        n, n_z, M, n_particles, is_training, keep_prob)
     qz_samples, log_qz = variational.query('z', outputs=True,
                                            local_log_prob=True)
     qv_samples, log_qv = variational.query('v', outputs=True,
                                            local_log_prob=True)
-    #qbias_samples, log_qbias = variational.query('bias', outputs=True,
-    #                                             local_log_prob=True)
     log_qz = tf.reduce_sum(log_qz, axis=1) * \
         N / tf.cast(n, dtype=tf.float32)
     log_qv = tf.reduce_sum(log_qv, axis=1)
-    #log_qbias = tf.reduce_sum(log_qbias, axis=1)
 
     lower_bound = tf.reduce_mean(
         zs.sgvb(log_joint, {'r': gen_rating},
-                {'z': [qz_samples, log_qz], 'v': [qv_samples, log_qv]} #,
-                 #'bias': [qbias_samples, log_qbias]
-                , axis=0))
+                {'z': [qz_samples, log_qz],
+                 'v': [qv_samples, log_qv]}, axis=0))
 
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
     optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
@@ -260,16 +269,17 @@ if __name__ == '__main__':
                 l = t * batch_size
                 r = min((t + 1) * batch_size, N)
                 cur_batch_size = r - l
-                tr_mask, tr_rating, cc = get_traing_data(M, l, r, idxes,
-                                                         user_movie,
-                                                         user_movie_score)
+                tr_indices, tr_ratings, tr_portion, tr_mask, tr_rating, cc = \
+                    get_traing_data(M, l, r, idxes, user_movie,
+                                    user_movie_score)
                 _, __ = sess.run([infer, se],
                                  feed_dict={n: cur_batch_size,
                                             m: M,
                                             is_training: True,
                                             n_particles: K,
-                                            infer_mask: tr_mask,
-                                            infer_rating: tr_rating,
+                                            infer_indices: tr_indices,
+                                            infer_ratings: tr_ratings,
+                                            infer_portion: tr_portion,
                                             gen_mask: tr_mask,
                                             gen_rating: tr_rating,
                                             learning_rate_ph: learning_rate,
@@ -286,7 +296,7 @@ if __name__ == '__main__':
                     l = t * valid_batch_size
                     r = min((t + 1) * valid_batch_size, N)
                     cur_batch_size = r - l
-                    in_mask, in_rating, out_mask, out_rating = \
+                    in_indices, in_rating, in_portion, out_mask, out_rating = \
                         get_test_data(M, l, r, user_movie, user_movie_score,
                                       user_movie_valid, user_movie_score_valid)
                     __ = sess.run(se,
@@ -294,8 +304,9 @@ if __name__ == '__main__':
                                              m: M,
                                              is_training: False,
                                              n_particles: K,
-                                             infer_mask: in_mask,
-                                             infer_rating: in_rating,
+                                             infer_indices: in_indices,
+                                             infer_ratings: in_rating,
+                                             infer_portion: in_portion,
                                              gen_mask: out_mask,
                                              gen_rating: out_rating,
                                              learning_rate_ph: learning_rate,
@@ -313,7 +324,7 @@ if __name__ == '__main__':
                     l = t * test_batch_size
                     r = min((t + 1) * test_batch_size, N)
                     cur_batch_size = r - l
-                    in_mask, in_rating, out_mask, out_rating = \
+                    in_indices, in_rating, in_portion, out_mask, out_rating = \
                         get_test_data(M, l, r, user_movie, user_movie_score,
                                       user_movie_test, user_movie_score_test)
                     __ = sess.run(se,
@@ -321,8 +332,9 @@ if __name__ == '__main__':
                                              m: M,
                                              is_training: False,
                                              n_particles: K,
-                                             infer_mask: in_mask,
-                                             infer_rating: in_rating,
+                                             infer_indices: in_indices,
+                                             infer_ratings: in_rating,
+                                             infer_portion: in_portion,
                                              gen_mask: out_mask,
                                              gen_rating: out_rating,
                                              learning_rate_ph: learning_rate,
