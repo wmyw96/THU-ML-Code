@@ -34,7 +34,7 @@ def pmf(observed, n, m, D, n_particles, alpha_u,
     return model, pred_mu
 
 
-def q_net(observed, r, mask, n, D, m, n_particles, is_training):
+def q_net(observed, r, mask, n, D, m, n_particles, is_training, kp_dropout):
     with zs.BayesianNet(observed=observed) as variational:
         normalizer_params = {'is_training': is_training,
                              'updates_collections': None}
@@ -56,15 +56,19 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training):
         mask3 = tf.tile(tf.expand_dims(mask, 0), [n_particles, 1, 1])
         maskDp1 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, D+1])
         input_i = input_i * maskDp1
-        lz_r = layers.fully_connected(input_i, 200)
-        maskl200 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 200])
-        lz_r = lz_r * maskl200
-        lz_r = layers.fully_connected(lz_r, 100)
+#        input_i = tf.nn.dropout(input_i, keep_prob=kp_dropout)
+
+        lz_r = layers.fully_connected(input_i, 100)
+#        lz_r = tf.nn.dropout(lz_r, keep_prob=kp_dropout)
+        maskl50 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 50])
         maskl100 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 100])
+        maskl200 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 200])
+        lz_r = lz_r * maskl100
+        lz_r = layers.fully_connected(lz_r, 100)
         lz_r = lz_r * maskl100
         lz_r = tf.reduce_sum(lz_r, 2) / tf.reduce_sum(maskl100, 2)
-        lz_r = layers.fully_connected(
-            lz_r, 200)
+        #lz_r = tf.nn.dropout(lz_r, keep_prob=kp_dropout)
+        lz_r = layers.fully_connected(lz_r, 200)
         z_mean = layers.fully_connected(lz_r, D, activation_fn=None)
         z_log_std = layers.fully_connected(lz_r, D, activation_fn=None)
         z = zs.Normal('z', z_mean, logstd=z_log_std, n_samples=None,
@@ -148,7 +152,7 @@ if __name__ == '__main__':
     batch_size = 100
     test_batch_size = 100
     valid_batch_size = 100
-    K = 8
+    K = 5
     num_epochs = 1000
     learning_rate = 0.01
     anneal_lr_freq = 100
@@ -160,8 +164,9 @@ if __name__ == '__main__':
 
     hp_alpha_u = 1.0
     hp_alpha_v = 1.0
-    hp_alpha_pred = 0.1
+    hp_alpha_pred = 0.3
     hp_alpha_bias = 1.0
+    keep_prob = tf.placeholder(tf.float32, shape=[], name='kp')
 
     # Find non-trained files or peoples
     trained_movie = [False] * M
@@ -204,7 +209,7 @@ if __name__ == '__main__':
         return log_pz + log_pv + log_pr  # [K, n]
 
     variational = q_net({}, infer_rating, infer_mask, n, n_z,
-                        M, n_particles, is_training)
+                        M, n_particles, is_training, keep_prob)
     qz_samples, log_qz = variational.query('z', outputs=True,
                                            local_log_prob=True)
     qv_samples, log_qv = variational.query('v', outputs=True,
@@ -271,7 +276,8 @@ if __name__ == '__main__':
                                             infer_rating: tr_rating,
                                             gen_mask: tr_mask,
                                             gen_rating: tr_rating,
-                                            learning_rate_ph: learning_rate})
+                                            learning_rate_ph: learning_rate,
+                                            keep_prob: 0.5})
                 ses.append(__)
             epoch_time += time.time()
             print('Epoch {}({:.1f}s): rmse = {}'.format(
@@ -296,7 +302,8 @@ if __name__ == '__main__':
                                              infer_rating: in_rating,
                                              gen_mask: out_mask,
                                              gen_rating: out_rating,
-                                             learning_rate_ph: learning_rate})
+                                             learning_rate_ph: learning_rate,
+                                             keep_prob: 1.0})
                     test_se.append(__)
                 time_test += time.time()
                 print('>>> VALIDATION ({:.1f}s)'.format(time_test))
@@ -322,7 +329,8 @@ if __name__ == '__main__':
                                              infer_rating: in_rating,
                                              gen_mask: out_mask,
                                              gen_rating: out_rating,
-                                             learning_rate_ph: learning_rate})
+                                             learning_rate_ph: learning_rate,
+                                             keep_prob: 1.0})
                     test_se.append(__)
                 time_test += time.time()
                 print('>>> TEST ({:.1f}s)'.format(time_test))
