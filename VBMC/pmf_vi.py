@@ -56,10 +56,7 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training, kp_dropout):
         mask3 = tf.tile(tf.expand_dims(mask, 0), [n_particles, 1, 1])
         maskDp1 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, D+1])
         input_i = input_i * maskDp1
-#        input_i = tf.nn.dropout(input_i, keep_prob=kp_dropout)
-
         lz_r = layers.fully_connected(input_i, 100)
-#        lz_r = tf.nn.dropout(lz_r, keep_prob=kp_dropout)
         maskl50 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 50])
         maskl100 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 100])
         maskl200 = tf.tile(tf.expand_dims(mask3, 3), [1, 1, 1, 200])
@@ -67,7 +64,6 @@ def q_net(observed, r, mask, n, D, m, n_particles, is_training, kp_dropout):
         lz_r = layers.fully_connected(lz_r, 100)
         lz_r = lz_r * maskl100
         lz_r = tf.reduce_sum(lz_r, 2) / tf.reduce_sum(maskl100, 2)
-        #lz_r = tf.nn.dropout(lz_r, keep_prob=kp_dropout)
         lz_r = layers.fully_connected(lz_r, 200)
         z_mean = layers.fully_connected(lz_r, D, activation_fn=None)
         z_log_std = layers.fully_connected(lz_r, D, activation_fn=None)
