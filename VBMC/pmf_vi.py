@@ -8,6 +8,7 @@ import zhusuan as zs
 from dataset import load_movielens1m_mapped_ptest
 from tensorflow.contrib import layers
 import random
+import sys
 
 
 def select_from_axis1(para, indices):
@@ -51,8 +52,12 @@ def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
         input_v = select_from_axis1(v, indices)       # [K, np, D]
         input_r = tf.tile(tf.expand_dims(tf.expand_dims(ratings, 0), 2),
                           [n_particles, 1, 1])
+        input_mask = tf.nn.dropout(tf.ones(shape=[n_particles,
+                                                  tf.shape(indices)[0]]),
+                                   keep_prob=kp_dropout)
+        input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D+1])
         input_i = tf.concat([input_v, input_r], 2)  # [K, np, D+1]
-        lh_r = layers.fully_connected(input_i, 200)
+        lh_r = layers.fully_connected(input_i * input_mask, 100)
         lh_r = layers.fully_connected(lh_r, 100)
         hd = \
             tf.matmul(
@@ -160,7 +165,8 @@ if __name__ == '__main__':
     valid_batch_size = 100
     K = 5
     num_epochs = 1000
-    learning_rate = 0.01
+    learning_rate = float(sys.argv[1])
+    print('learning rate = {}'.format(learning_rate))
     anneal_lr_freq = 100
     anneal_lr_rate = 0.75
     iters = (N + batch_size - 1) // batch_size
@@ -170,8 +176,11 @@ if __name__ == '__main__':
 
     hp_alpha_u = 1.0
     hp_alpha_v = 1.0
-    hp_alpha_pred = 0.3
+    hp_alpha_pred = float(sys.argv[2])
+    print('alpha_pred = {}'.format(hp_alpha_pred))
     hp_alpha_bias = 1.0
+    constant_kp = float(sys.argv[3])
+    print('keep_prob = {}'.format(constant_kp))
     keep_prob = tf.placeholder(tf.float32, shape=[], name='kp')
 
     # Find non-trained files or peoples
@@ -283,7 +292,7 @@ if __name__ == '__main__':
                                             gen_mask: tr_mask,
                                             gen_rating: tr_rating,
                                             learning_rate_ph: learning_rate,
-                                            keep_prob: 0.5})
+                                            keep_prob: constant_kp})
                 ses.append(__)
             epoch_time += time.time()
             print('Epoch {}({:.1f}s): rmse = {}'.format(
