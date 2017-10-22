@@ -11,55 +11,63 @@ import random
 import sys
 
 
-def select_from_axis1(para, indices):
-    gather_para = tf.transpose(para, perm=[1, 0, 2])
+def select_from_axis(para, indices, axis, rank):
+    perm = range(rank)
+    perm[axis] = 0
+    perm[0] = axis
+    gather_para = tf.transpose(para, perm=perm)
     gather_para = tf.gather(gather_para, indices)
-    gather_para = tf.transpose(gather_para, perm=[1, 0, 2])
+    gather_para = tf.transpose(gather_para, perm=perm)
     return gather_para
 
 
-def pmf(observed, n, m, D, n_particles, select_uid, select_vid, alpha_u,
-        alpha_v, alpha_pred, is_training):
+def pmf(observed, n, m, num_ratings, D, n_particles, select_uid, select_vid,
+        alpha_u, alpha_v, alpha_pred, is_training):
     with zs.BayesianNet(observed=observed) as model:
         mu_z = tf.zeros(shape=[n, D])
         log_std_z = tf.ones(shape=[n, D]) * tf.log(alpha_u)
         z = zs.Normal('z', mu_z, logstd=log_std_z,
                       n_samples=n_particles, group_event_ndims=1)  # [K, n, D]
-        mu_v = tf.zeros(shape=[m, D])
-        log_std_v = tf.ones(shape=[m, D]) * tf.log(alpha_v)
+        mu_v = tf.zeros(shape=[m, num_ratings, D])
+        log_std_v = tf.ones(shape=[m, num_ratings, D]) * tf.log(alpha_v)
         v = zs.Normal('v', mu_v, logstd=log_std_v,
-                      n_samples=n_particles, group_event_ndims=1)  # [K, m, D]
-        select_u = select_from_axis1(z, select_uid)
-        select_v = select_from_axis1(v, select_vid)
-        pred_mu = tf.reduce_sum(select_u * select_v, axis=2)
-        r = zs.Normal('r', pred_mu, logstd=tf.log(alpha_pred))   # [K, B]
+                      n_samples=n_particles, group_event_ndims=1)  # [K, m, nR, D]
+        select_u = select_from_axis(z, select_uid, 1, 3)   # [K, B, D]
+        select_v = select_from_axis(v, select_vid, 1, 4)   # [K, B, nR, D]
+        select_u = tf.tile(tf.expand_dims(select_u, 2), [1, 1, num_ratings, 1])
+        pred_score = tf.reduce_sum(select_u * select_v, axis=3)
+        constant_rating = tf.constant([1, 2, 3, 4, 5], dtype=tf.float32) # [nR]
+        constant_rating = tf.expand_dims(tf.expand_dims(constant_rating, 0), 0)
+        pred_mu = \
+            tf.reduce_sum(tf.nn.softmax(pred_score, dim=3) * constant_rating)
+        r = zs.OnehotCategorical('r', logits=pred_score)   # [K, B]
     return model, pred_mu
 
 
-def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
+def q_net(observed, ratings, indices, portion, n, D, m, n_ratings, n_particles,
           is_training, kp_dropout):
     with zs.BayesianNet(observed=observed) as variational:
         normalizer_params = {'is_training': is_training,
                              'updates_collections': None}
         mu_v = \
-            tf.get_variable('q_mu_v', shape=[m, D],
+            tf.get_variable('q_mu_v', shape=[m, n_ratings, D],
                             initializer=tf.random_normal_initializer(0, 0.1))
         log_std_v = \
-            tf.get_variable('q_log_std_v', shape=[m, 1],
+            tf.get_variable('q_log_std_v', shape=[m, n_ratings, D],
                             initializer=tf.random_normal_initializer(0, 0.1))
-        log_std_v = tf.tile(log_std_v, [1, D])
+        #log_std_v = tf.tile(log_std_v, [1, D])
         v = zs.Normal('v', mu_v, logstd=log_std_v,
-                      n_samples=n_particles, group_event_ndims=1)  # [K, m, D]
-        input_v = select_from_axis1(v, indices)       # [K, np, D]
-        input_r = tf.tile(tf.expand_dims(tf.expand_dims(ratings, 0), 2),
-                          [n_particles, 1, 1])
-        input_v = input_v * input_r
+                      n_samples=n_particles, group_event_ndims=1)  # [K, m, nR, D]
+        input_v = select_from_axis(v, indices, 1, 4)       # [K, np, nR, D]
+        one_hot_rt = tf.one_hot(ratings - 1, depth=5)
+        one_hot_rt = tf.expand_dims(tf.expand_dims(one_hot_rt, 0), 3)
+        input_v = tf.reduce_sum(one_hot_rt * input_v, axis=2)
         input_mask = tf.nn.dropout(tf.ones(shape=[n_particles,
                                                   tf.shape(indices)[0]]),
                                    keep_prob=kp_dropout)
-        input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D+1])
-        input_i = tf.concat([input_v, input_r], 2)  # [K, np, D+1]
-        lh_r = layers.fully_connected(input_i * input_mask, 100)
+        input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D])
+        input_i = input_v * input_mask  # [K, np, D+1]
+        lh_r = layers.fully_connected(input_i, 100)
         lh_r = layers.fully_connected(lh_r, 100)
         hd = \
             tf.matmul(
@@ -81,19 +89,15 @@ def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
     vid = []
     for i in range(tail - head):
         user_id = idx_list[head + i]
-        bias = 3.0
-        if len(user_movie_score[user_id]) > 0:
-            bias = np.mean(user_movie_score[i])
-        for j in range(len(user_movie[user_id])):
-            uid.append(i)
-            vid.append(user_movie[user_id][j])
-            i_ratings = i_ratings + [user_movie_score[user_id][j] - bias]
-            cc += 1
+
+        uid += [i] * len(user_movie[user_id])
+        vid += user_movie[user_id]
+        i_ratings += user_movie_score[user_id]
+        cc += len(user_movie[user_id])
 
         i_indices = i_indices + user_movie[user_id]
         i_coeff = i_coeff + [len(user_movie[user_id])]
 
-    i_ratings = np.array(i_ratings) / np.sqrt(2)
     i_portion = np.zeros((len(i_coeff), sum(i_coeff)))
     id = 0
     for i in range(len(i_coeff)):
@@ -113,28 +117,22 @@ def get_test_data(M, head, tail, user_movie, user_movie_score,
     ratings = []
     for i in range(tail - head):
         user_id = head + i
-        bias = 3.0
-        if len(user_movie_score[user_id]) > 0:
-            bias = np.mean(user_movie_score[i])
-        for j in range(len(user_movie[user_id])):
-            i_ratings += [user_movie_score[user_id][j] - bias]
+
+        i_ratings += user_movie_score[user_id]
         i_coeff += [len(user_movie_score[user_id])]
         i_indices += user_movie[user_id]
 
-        for j in range(len(user_movie_test[user_id])):
-            uid += [i]
-            vid += [user_movie_test[user_id][j]]
-            ratings += [user_movie_score_test[user_id][j] - bias]
+        uid += [i] * len(user_movie_test[user_id])
+        vid += user_movie_test[user_id]
+        ratings += user_movie_score_test[user_id]
 
-    i_ratings = np.array(i_ratings) / np.sqrt(2)
-    rating_batch = np.array(ratings) / np.sqrt(2)
     i_portion = np.zeros((len(i_coeff), sum(i_coeff)))
     id = 0
     for i in range(len(i_coeff)):
         for j in range(i_coeff[i]):
             i_portion[i][id] = 1.0 / i_coeff[i]
             id += 1
-    return i_indices, i_ratings, i_portion, uid, vid, rating_batch
+    return i_indices, i_ratings, i_portion, uid, vid, ratings
 
 
 if __name__ == '__main__':
@@ -156,6 +154,7 @@ if __name__ == '__main__':
     valid_batch_size = 100
     K = 5
     num_epochs = 1000
+    n_rts = 5
     learning_rate = float(sys.argv[1])
     print('learning rate = {}'.format(learning_rate))
     anneal_lr_freq = 100
@@ -198,15 +197,15 @@ if __name__ == '__main__':
     infer_indices = \
         tf.placeholder(tf.int32, shape=[None], name='infer_indices')
     infer_ratings = \
-        tf.placeholder(tf.float32, shape=[None], name='infer_ratings')
+        tf.placeholder(tf.int32, shape=[None], name='infer_ratings')
     infer_portion = \
         tf.placeholder(tf.float32, shape=[None, None], name='infer_portion')
     gen_uid = tf.placeholder(tf.int32, shape=[None, ], name='gen_uid')
     gen_vid = tf.placeholder(tf.int32, shape=[None, ], name='gen_vid')
-    gen_rating = tf.placeholder(tf.float32, shape=[None, ], name='gen_rating')
+    gen_rating = tf.placeholder(tf.int32, shape=[None, ], name='gen_rating')
 
     def log_joint(observed):
-        model, _ = pmf(observed, n, M, n_z, n_particles, gen_uid, gen_vid,
+        model, _ = pmf(observed, n, M, n_rts, n_z, n_particles, gen_uid, gen_vid,
                        hp_alpha_u, hp_alpha_v, hp_alpha_pred, is_training)
         log_pz, log_pv, log_pr = \
             model.local_log_prob(['z', 'v', 'r'])
@@ -216,7 +215,7 @@ if __name__ == '__main__':
         return log_pz + log_pv + log_pr  # [K]
 
     variational = q_net({}, infer_ratings, infer_indices, infer_portion,
-                        n, n_z, M, n_particles, is_training, keep_prob)
+                        n, n_z, M, n_rts, n_particles, is_training, keep_prob)
     qz_samples, log_qz = variational.query('z', outputs=True,
                                            local_log_prob=True)
     qv_samples, log_qv = variational.query('v', outputs=True,
@@ -224,8 +223,9 @@ if __name__ == '__main__':
     log_qz = tf.reduce_sum(log_qz, axis=1)
     log_qv = tf.reduce_sum(log_qv, axis=1)
 
+    onehot_rating = tf.one_hot(gen_rating - 1, depth=5)
     lower_bound = tf.reduce_mean(
-        zs.sgvb(log_joint, {'r': gen_rating},
+        zs.sgvb(log_joint, {'r': onehot_rating},
                 {'z': [qz_samples, log_qz],
                  'v': [qv_samples, log_qv]}, axis=0))
 
@@ -236,10 +236,10 @@ if __name__ == '__main__':
 
     # Prediction and SE calculation
     _, pred = pmf({'z': qz_samples, 'v': qv_samples, 'r': gen_rating},
-                  n, M, n_z, n_particles, gen_uid, gen_vid,
+                  n, M, n_rts, n_z, n_particles, gen_uid, gen_vid,
                   hp_alpha_u, hp_alpha_v, hp_alpha_pred, is_training)
     pred = tf.reduce_mean(pred, axis=0)
-    error = (pred - gen_rating)
+    error = (pred - tf.cast(gen_rating, dtype=tf.float32))
     se = tf.reduce_sum(error * error)
 
     params = tf.trainable_variables()
