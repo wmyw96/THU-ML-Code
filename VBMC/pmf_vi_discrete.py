@@ -36,12 +36,21 @@ def pmf(observed, n, m, num_ratings, D, n_particles, select_uid, select_vid,
         select_v = select_from_axis(v, select_vid, 1, 4)   # [K, B, nR, D]
         select_u = tf.tile(tf.expand_dims(select_u, 2), [1, 1, num_ratings, 1])
         pred_score = tf.reduce_sum(select_u * select_v, axis=3)
-        constant_rating = tf.constant([1, 2, 3, 4, 5], dtype=tf.float32) # [nR]
-        constant_rating = tf.expand_dims(tf.expand_dims(constant_rating, 0), 0)
+        const_rating = tf.constant([1, 2, 3, 4, 5], dtype=tf.float32) # [nR]
+        const_rating = tf.expand_dims(tf.expand_dims(const_rating, 0), 0)
         pred_mu = \
-            tf.reduce_sum(tf.nn.softmax(pred_score, dim=3) * constant_rating)
+            tf.reduce_sum(tf.nn.softmax(pred_score, dim=2) * const_rating, axis=2)
+        print(pred_score.get_shape())
         r = zs.OnehotCategorical('r', logits=pred_score)   # [K, B]
-    return model, pred_mu
+    return model, pred_mu, tf.nn.softmax(pred_score, dim=2)
+
+
+def get_accu(K):
+    x = np.zeros((K, K))
+    for i in range(K):
+        for j in range(i + 1):
+            x[i, j] = 1
+    return tf.constant(x, dtype=tf.float32)
 
 
 def q_net(observed, ratings, indices, portion, n, D, m, n_ratings, n_particles,
@@ -51,11 +60,15 @@ def q_net(observed, ratings, indices, portion, n, D, m, n_ratings, n_particles,
                              'updates_collections': None}
         mu_v = \
             tf.get_variable('q_mu_v', shape=[m, n_ratings, D],
-                            initializer=tf.random_normal_initializer(0, 0.1))
+                            initializer=tf.random_normal_initializer(0, 0.3))
+        accu = get_accu(n_ratings)
+        accu = tf.tile(tf.expand_dims(accu, 0), [m, 1, 1])
+        mu_v = tf.matmul(accu, mu_v)
         log_std_v = \
             tf.get_variable('q_log_std_v', shape=[m, n_ratings, D],
-                            initializer=tf.random_normal_initializer(0, 0.1))
-        #log_std_v = tf.tile(log_std_v, [1, D])
+                            initializer=tf.random_normal_initializer(0, 0.01))
+        log_std_v = tf.matmul(accu, log_std_v)
+        #log_std_v = tf.tile(log_std_v, [1, 1, D])
         v = zs.Normal('v', mu_v, logstd=log_std_v,
                       n_samples=n_particles, group_event_ndims=1)  # [K, m, nR, D]
         input_v = select_from_axis(v, indices, 1, 4)       # [K, np, nR, D]
@@ -67,8 +80,8 @@ def q_net(observed, ratings, indices, portion, n, D, m, n_ratings, n_particles,
                                    keep_prob=kp_dropout)
         input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D])
         input_i = input_v * input_mask  # [K, np, D+1]
-        lh_r = layers.fully_connected(input_i, 100)
-        lh_r = layers.fully_connected(lh_r, 100)
+        lh_r = layers.fully_connected(input_i, 200)
+        lh_r = layers.fully_connected(lh_r, 200)
         hd = \
             tf.matmul(
                 tf.tile(tf.expand_dims(portion, 0), [n_particles, 1, 1]), lh_r)
@@ -205,13 +218,20 @@ if __name__ == '__main__':
     gen_rating = tf.placeholder(tf.int32, shape=[None, ], name='gen_rating')
 
     def log_joint(observed):
-        model, _ = pmf(observed, n, M, n_rts, n_z, n_particles, gen_uid, gen_vid,
+        model, _, __ = pmf(observed, n, M, n_rts, n_z, n_particles, gen_uid, gen_vid,
                        hp_alpha_u, hp_alpha_v, hp_alpha_pred, is_training)
         log_pz, log_pv, log_pr = \
             model.local_log_prob(['z', 'v', 'r'])
+        #print(log_pr.get_shape())
         log_pr = tf.reduce_sum(log_pr, axis=1)
         log_pz = tf.reduce_sum(log_pz, axis=1)
         log_pv = tf.reduce_sum(log_pv, axis=1)
+        log_pv =  tf.reduce_sum(log_pv, axis=1)
+        #print('ff')
+        #print(log_pr.get_shape())
+        #print(log_pz.get_shape())
+        #print(log_pv.get_shape())
+        #print('ef')
         return log_pz + log_pv + log_pr  # [K]
 
     variational = q_net({}, infer_ratings, infer_indices, infer_portion,
@@ -222,23 +242,30 @@ if __name__ == '__main__':
                                            local_log_prob=True)
     log_qz = tf.reduce_sum(log_qz, axis=1)
     log_qv = tf.reduce_sum(log_qv, axis=1)
+    log_qv = tf.reduce_sum(log_qv, axis=1)
+    #print(log_qz.get_shape())
+    #print(log_qv.get_shape())
 
     onehot_rating = tf.one_hot(gen_rating - 1, depth=5)
+    onehot_rating = tf.cast(onehot_rating, tf.int32)
+    onehot_obs = tf.tile(tf.expand_dims(onehot_rating, 0), [n_particles, 1, 1])
     lower_bound = tf.reduce_mean(
-        zs.sgvb(log_joint, {'r': onehot_rating},
+        zs.sgvb(log_joint, {'r': onehot_obs},
                 {'z': [qz_samples, log_qz],
                  'v': [qv_samples, log_qv]}, axis=0))
 
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
-    optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
+    optimizer = tf.train.AdamOptimizer(learning_rate_ph)
     grads = optimizer.compute_gradients(-lower_bound)
     infer = optimizer.apply_gradients(grads)
 
     # Prediction and SE calculation
-    _, pred = pmf({'z': qz_samples, 'v': qv_samples, 'r': gen_rating},
+    _, pred, score = pmf({'z': qz_samples, 'v': qv_samples, 'r': gen_rating},
                   n, M, n_rts, n_z, n_particles, gen_uid, gen_vid,
                   hp_alpha_u, hp_alpha_v, hp_alpha_pred, is_training)
     pred = tf.reduce_mean(pred, axis=0)
+    prob = tf.reduce_mean(score, axis=0)
+    acc = tf.reduce_mean(tf.reduce_sum(prob * onehot_rating, axis=1), axis=0)
     error = (pred - tf.cast(gen_rating, dtype=tf.float32))
     se = tf.reduce_sum(error * error)
 
@@ -256,6 +283,7 @@ if __name__ == '__main__':
 
             epoch_time = -time.time()
             ses = []
+            accs = []
             idxes = range(N)
             random.shuffle(idxes)
             if epoch % anneal_lr_freq == 0:
@@ -268,7 +296,7 @@ if __name__ == '__main__':
                 tr_ins, tr_rts, tr_port, tr_u, tr_v, tr_rating, cc = \
                     get_traing_data(M, l, r, idxes, user_movie,
                                     user_movie_score)
-                _, __ = sess.run([infer, se],
+                _, __, ___, xx = sess.run([infer, se, acc, onehot_rating],
                                  feed_dict={n: cur_batch_size,
                                             m: M,
                                             is_training: True,
@@ -282,9 +310,12 @@ if __name__ == '__main__':
                                             learning_rate_ph: learning_rate,
                                             keep_prob: constant_kp})
                 ses.append(__)
+                accs.append(___)
+                print(xx)
             epoch_time += time.time()
-            print('Epoch {}({:.1f}s): rmse = {}'.format(
-                epoch + 1, epoch_time, np.sqrt(np.sum(ses) / N_train * 2)))
+            print('Epoch {}({:.1f}s): rmse = {}, acc = {}'.format(
+                epoch + 1, epoch_time, np.sqrt(np.sum(ses) / N_train),
+                np.mean(accs)))
 
             if (epoch + 1) % 10 == 0:
                 test_se = []
@@ -313,7 +344,7 @@ if __name__ == '__main__':
                 time_test += time.time()
                 print('>>> VALIDATION ({:.1f}s)'.format(time_test))
                 print('>> Valid rmse = {}'.format(
-                    (np.sqrt(np.sum(test_se) / N_valid * 2))))
+                    (np.sqrt(np.sum(test_se) / N_valid))))
 
             if (epoch + 1) % 10 == 0:
                 test_se = []
@@ -342,4 +373,5 @@ if __name__ == '__main__':
                 time_test += time.time()
                 print('>>> TEST ({:.1f}s)'.format(time_test))
                 print('>> Test rmse = {}'.format(
-                    (np.sqrt(np.sum(test_se) / N_test * 2))))
+                    (np.sqrt(np.sum(test_se) / N_test))))
+

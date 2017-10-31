@@ -36,6 +36,10 @@ def pmf(observed, n, m, D, n_particles, select_uid, select_vid, alpha_u,
     return model, pred_mu
 
 
+def constant_mask(input_x, rank, n):
+    return tf.tile(tf.concat([tf.ones(tf.shape(input_x)), input_x], -1), [1] * rank + [n])
+
+
 def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
           is_training, kp_dropout):
     with zs.BayesianNet(observed=observed) as variational:
@@ -45,22 +49,22 @@ def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
             tf.get_variable('q_mu_v', shape=[m, D],
                             initializer=tf.random_normal_initializer(0, 0.1))
         log_std_v = \
-            tf.get_variable('q_log_std_v', shape=[m, 1],
+            tf.get_variable('q_log_std_v', shape=[m, D],
                             initializer=tf.random_normal_initializer(0, 0.1))
-        log_std_v = tf.tile(log_std_v, [1, D])
         v = zs.Normal('v', mu_v, logstd=log_std_v,
                       n_samples=n_particles, group_event_ndims=1)  # [K, m, D]
         input_v = select_from_axis1(v, indices)       # [K, np, D]
         input_r = tf.tile(tf.expand_dims(tf.expand_dims(ratings, 0), 2),
                           [n_particles, 1, 1])
-        input_v = input_v * input_r
         input_mask = tf.nn.dropout(tf.ones(shape=[n_particles,
                                                   tf.shape(indices)[0]]),
                                    keep_prob=kp_dropout)
-        input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D+1])
+        input_rp = tf.tile(input_r, [1, 1, D])
+        input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D+D])
         input_i = tf.concat([input_v, input_r], 2)  # [K, np, D+1]
-        lh_r = layers.fully_connected(input_i * input_mask, 100)
-        lh_r = layers.fully_connected(lh_r, 100)
+        lh_r = layers.fully_connected(input_i * input_mask, 200)
+        lh_r = layers.fully_connected(lh_r, 200)
+        lh_r = lh_r * constant_mask(input_r, 2, 100)
         hd = \
             tf.matmul(
                 tf.tile(tf.expand_dims(portion, 0), [n_particles, 1, 1]), lh_r)
@@ -83,7 +87,7 @@ def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
         user_id = idx_list[head + i]
         bias = 3.0
         if len(user_movie_score[user_id]) > 0:
-            bias = np.mean(user_movie_score[i])
+            bias = np.mean(user_movie_score[user_id])
         for j in range(len(user_movie[user_id])):
             uid.append(i)
             vid.append(user_movie[user_id][j])
@@ -98,7 +102,7 @@ def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
     id = 0
     for i in range(len(i_coeff)):
         for j in range(i_coeff[i]):
-            i_portion[i][id] = 1.0 / i_coeff[i]
+            i_portion[i][id] = 1.0 / max(i_coeff[i], 1)
             id += 1
     return i_indices, i_ratings, i_portion, uid, vid, i_ratings, cc
 
@@ -115,7 +119,7 @@ def get_test_data(M, head, tail, user_movie, user_movie_score,
         user_id = head + i
         bias = 3.0
         if len(user_movie_score[user_id]) > 0:
-            bias = np.mean(user_movie_score[i])
+            bias = np.mean(user_movie_score[user_id])
         for j in range(len(user_movie[user_id])):
             i_ratings += [user_movie_score[user_id][j] - bias]
         i_coeff += [len(user_movie_score[user_id])]
@@ -132,7 +136,7 @@ def get_test_data(M, head, tail, user_movie, user_movie_score,
     id = 0
     for i in range(len(i_coeff)):
         for j in range(i_coeff[i]):
-            i_portion[i][id] = 1.0 / i_coeff[i]
+            i_portion[i][id] = 1.0 / max(i_coeff[i], 1)
             id += 1
     return i_indices, i_ratings, i_portion, uid, vid, rating_batch
 
@@ -235,7 +239,7 @@ if __name__ == '__main__':
     infer = optimizer.apply_gradients(grads)
 
     # Prediction and SE calculation
-    _, pred = pmf({'z': qz_samples, 'v': qv_samples, 'r': gen_rating},
+    _, pred = pmf({'z': qz_samples, 'v': qv_samples},
                   n, M, n_z, n_particles, gen_uid, gen_vid,
                   hp_alpha_u, hp_alpha_v, hp_alpha_pred, is_training)
     pred = tf.reduce_mean(pred, axis=0)
@@ -245,8 +249,6 @@ if __name__ == '__main__':
     params = tf.trainable_variables()
     for i in params:
         print(i.name, i.get_shape())
-
-    saver = tf.train.Saver(max_to_keep=10)
 
     # Run the inference
     with tf.Session() as sess:

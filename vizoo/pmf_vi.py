@@ -40,6 +40,11 @@ def constant_mask(input_x, rank, n):
     return tf.tile(tf.concat([tf.ones(tf.shape(input_x)), input_x], -1), [1] * rank + [n])
 
 
+def kl_divergence(mu, log_std):
+    std = tf.exp(log_std)
+    return -0.5 * (1 + 2 * log_std - mu * mu - std * std)
+
+
 def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
           is_training, kp_dropout):
     with zs.BayesianNet(observed=observed) as variational:
@@ -59,11 +64,14 @@ def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
         input_mask = tf.nn.dropout(tf.ones(shape=[n_particles,
                                                   tf.shape(indices)[0]]),
                                    keep_prob=kp_dropout)
-        input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D+1])
-        input_i = tf.concat([input_v, input_r], 2)  # [K, np, D+1]
-        lh_r = layers.fully_connected(input_i * input_mask, 100)
-        lh_r = layers.fully_connected(lh_r, 100)
-        lh_r = lh_r * constant_mask(input_r, 2, 50)
+        input_rp = tf.tile(input_r, [1, 1, D])
+        input_mask = tf.tile(tf.expand_dims(input_mask, 2), [1, 1, D+D])
+        input_i = tf.concat([input_v, input_rp], 2)  # [K, np, D+1]
+        input_i = input_i * input_mask
+        lh_r = layers.fully_connected(input_i, 200)
+        lh_r = layers.fully_connected(lh_r, 200)
+        lh_r = lh_r * constant_mask(input_r, 2, 100)
+        lh_r = tf.concat([lh_r, input_i], axis=-1)
         hd = \
             tf.matmul(
                 tf.tile(tf.expand_dims(portion, 0), [n_particles, 1, 1]), lh_r)
@@ -72,7 +80,11 @@ def q_net(observed, ratings, indices, portion, n, D, m, n_particles,
         z_log_std = layers.fully_connected(lz_h, D, activation_fn=None)
         z = zs.Normal('z', z_mean, logstd=z_log_std, n_samples=None,
                       group_event_ndims=1)
-    return variational
+        kl_p = kl_divergence(mu_v, log_std_v)
+        kl_q = kl_divergence(z_mean, z_log_std) / tf.cast(n_particles, tf.float32)
+        kl_p = tf.reduce_sum(kl_p)
+        kl_q = tf.reduce_sum(kl_q)
+    return variational, kl_p, kl_q
 
 
 def get_traing_data(M, head, tail, idx_list, user_movie, user_movie_score):
@@ -206,18 +218,10 @@ if __name__ == '__main__':
     gen_vid = tf.placeholder(tf.int32, shape=[None, ], name='gen_vid')
     gen_rating = tf.placeholder(tf.float32, shape=[None, ], name='gen_rating')
 
-    def log_joint(observed):
-        model, _ = pmf(observed, n, M, n_z, n_particles, gen_uid, gen_vid,
-                       hp_alpha_u, hp_alpha_v, hp_alpha_pred, is_training)
-        log_pz, log_pv, log_pr = \
-            model.local_log_prob(['z', 'v', 'r'])
-        log_pr = tf.reduce_sum(log_pr, axis=1)
-        log_pz = tf.reduce_sum(log_pz, axis=1)
-        log_pv = tf.reduce_sum(log_pv, axis=1)
-        return log_pz + log_pv + log_pr  # [K]
-
-    variational = q_net({}, infer_ratings, infer_indices, infer_portion,
-                        n, n_z, M, n_particles, is_training, keep_prob)
+    # bottom-top model
+    variational, kl_p, kl_q = \
+        q_net({}, infer_ratings, infer_indices, infer_portion,
+              n, n_z, M, n_particles, is_training, keep_prob)
     qz_samples, log_qz = variational.query('z', outputs=True,
                                            local_log_prob=True)
     qv_samples, log_qv = variational.query('v', outputs=True,
@@ -225,10 +229,21 @@ if __name__ == '__main__':
     log_qz = tf.reduce_sum(log_qz, axis=1)
     log_qv = tf.reduce_sum(log_qv, axis=1)
 
-    lower_bound = tf.reduce_mean(
-        zs.sgvb(log_joint, {'r': gen_rating},
-                {'z': [qz_samples, log_qz],
-                 'v': [qv_samples, log_qv]}, axis=0))
+    # top-bottom model
+    observed = {'r': gen_rating, 'z': qz_samples,
+                'v': qv_samples}
+    model, _ = pmf(observed, n, M, n_z, n_particles, gen_uid, gen_vid,
+        hp_alpha_u, hp_alpha_v, hp_alpha_pred, is_training)
+    log_pz, log_pv, log_pr = model.local_log_prob(['z', 'v', 'r'])
+    log_pr = tf.reduce_sum(log_pr, axis=1)
+    log_pz = tf.reduce_sum(log_pz, axis=1)
+    log_pv = tf.reduce_sum(log_pv, axis=1)
+
+    likelihood = log_pr
+    kl = kl_p + kl_q
+
+    lower_bound_k = likelihood - kl
+    lower_bound = tf.reduce_mean(lower_bound_k)
 
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
     optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
@@ -244,8 +259,25 @@ if __name__ == '__main__':
     se = tf.reduce_sum(error * error)
 
     params = tf.trainable_variables()
+
+    # Add exponential moving averages
+    ema = tf.train.ExponentialMovingAverage(decay=0.995)
+    maintain_averages_op = ema.apply(params)
+    with tf.control_dependencies([infer]):
+        infer_ema = tf.group(maintain_averages_op)
+    back_params = {}
+    bps_assign = []
+    bps_assign_back = []
+    avp_assign = []
+    avs = []
     for i in params:
         print(i.name, i.get_shape())
+        back_param = tf.Variable(tf.zeros(i.get_shape()))
+        bps_assign.append(tf.assign(back_param, i))
+        bps_assign_back.append(tf.assign(i, back_param))
+        av = ema.average(i)
+        avs.append(av)
+        avp_assign.append(tf.assign(i, av))
 
     # Run the inference
     with tf.Session() as sess:
@@ -267,7 +299,7 @@ if __name__ == '__main__':
                 tr_ins, tr_rts, tr_port, tr_u, tr_v, tr_rating, cc = \
                     get_traing_data(M, l, r, idxes, user_movie,
                                     user_movie_score)
-                _, __ = sess.run([infer, se],
+                _, __ = sess.run([infer_ema, se],
                                  feed_dict={n: cur_batch_size,
                                             m: M,
                                             is_training: True,
@@ -286,6 +318,15 @@ if __name__ == '__main__':
                 epoch + 1, epoch_time, np.sqrt(np.sum(ses) / N_train * 2)))
 
             if (epoch + 1) % 10 == 0:
+                
+                # load averaging parameters
+                for i in bps_assign:
+                    _ = sess.run(i)
+                for i in range(len(avs)):
+                    #_, __ = sess.run([avs[i], params[i]])
+                    #print(_ - __)
+                    _ = sess.run(avp_assign[i])
+
                 test_se = []
                 time_test = -time.time()
                 for t in range(valid_iters):
@@ -314,7 +355,6 @@ if __name__ == '__main__':
                 print('>> Valid rmse = {}'.format(
                     (np.sqrt(np.sum(test_se) / N_valid * 2))))
 
-            if (epoch + 1) % 10 == 0:
                 test_se = []
                 time_test = -time.time()
                 for t in range(test_iters):
@@ -342,3 +382,8 @@ if __name__ == '__main__':
                 print('>>> TEST ({:.1f}s)'.format(time_test))
                 print('>> Test rmse = {}'.format(
                     (np.sqrt(np.sum(test_se) / N_test * 2))))
+
+                # load back
+                for i in bps_assign_back:
+                    _ = sess.run(i)
+

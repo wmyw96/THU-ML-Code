@@ -44,8 +44,8 @@ def load_movielens1m(path):
         user_id = int(term[0]) - 1
         movie_id = int(term[1]) - 1
         rating = int(term[2])
-        #if movie_id > 50:
-        #    continue
+        if movie_id > 50 or user_id > 100:
+            continue
         corpus.append((user_id, movie_id, rating))
         num_users = max(num_users, user_id + 1)
         num_movies = max(num_movies, movie_id + 1)

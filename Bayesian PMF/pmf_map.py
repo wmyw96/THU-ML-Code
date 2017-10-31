@@ -25,7 +25,7 @@ if __name__ == '__main__':
     N_valid = np.shape(valid_data)[0]
     N_test = np.shape(test_data)[0]
     D = 30
-    epoches = 100
+    epoches = 1000
     batch_size = 100000
     valid_batch_size = 100000
     test_batch_size = 100000
